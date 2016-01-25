@@ -1,4 +1,4 @@
-﻿/**************************************************************************/
+/**************************************************************************/
 /*                                                                        */
 /*                            WWIV Version 5.x                            */
 /*                Copyright (C)2014-2016 WWIV Software Services           */
@@ -27,9 +27,12 @@ namespace WWIV5TelnetServer
 {
     class TelnetServer : IDisposable
     {
-        private Socket server;
+        private Socket server1;
+        private Socket server2; // SSH
         private Thread launcherThread;
         private Object nodeLock = new Object();
+        private string isSSH;
+        private string iSSH = "";
         private int lowNode;
         private int highNode;
         private List<NodeStatus> nodes;
@@ -67,10 +70,15 @@ namespace WWIV5TelnetServer
                 return;
             }
             OnStatusMessageUpdated("Stopping Telnet Server.", StatusMessageEventArgs.MessageType.LogInfo);
-            if (server != null)
+            if (server1 != null)
             {
-                server.Close();
-                server = null;
+                server1.Close();
+                server1 = null;
+            }
+            else // SSH
+            {
+                server2.Close();
+                server2 = null;
             }
             launcherThread.Abort();
             launcherThread.Join();
@@ -81,35 +89,67 @@ namespace WWIV5TelnetServer
 
         private void Run()
         {
+            // Telnet Server
             Int32 port = Convert.ToInt32(Properties.Settings.Default.port);
-            server = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            server.Bind(new IPEndPoint(IPAddress.Any, port));
-            server.Listen(4);
+            Int32 portSSH = Convert.ToInt32(Properties.Settings.Default.portSSH); // SSH
+            server1 = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            server2 = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp); // SSH
+            server1.Bind(new IPEndPoint(IPAddress.Any, port));
+            server2.Bind(new IPEndPoint(IPAddress.Any, portSSH)); // SSH
+            server1.Listen(4);
+            server2.Listen(4); // SSH
+            string ip;
+            ip = "";
             while (true)
             {
                 OnStatusMessageUpdated("Waiting for connection.", StatusMessageEventArgs.MessageType.LogInfo);
                 try
                 {
-                    Socket socket = server.Accept();
+                    Socket socket1 = server1.Accept();
+                    Socket socket2 = server2.Accept(); // SSH
                     Console.WriteLine("After accept.");
                     NodeStatus node = getNextNode();
-                    string ip = ((System.Net.IPEndPoint)socket.RemoteEndPoint).Address.ToString();
+                    string ip1 = ((System.Net.IPEndPoint)socket1.RemoteEndPoint).Address.ToString();
+                    string ip2 = ((System.Net.IPEndPoint)socket2.RemoteEndPoint).Address.ToString(); // SSH
                     // HACK
-                    if (ip == "202.39.236.116")
+                    if (ip1 == "202.39.236.116" || ip2 == "202.39.236.116")
                     {
                         // This IP has been bad. Blacklist it until proper filtering is added.
-                        OnStatusMessageUpdated("Attempt from blacklisted IP.", StatusMessageEventArgs.MessageType.LogInfo);
+                        OnStatusMessageUpdated("Attempt from Blacklisted IP.", StatusMessageEventArgs.MessageType.LogInfo);
                         Thread.Sleep(1000);
                         node = null;
                     }
-                    OnStatusMessageUpdated("Connection from " + ip, StatusMessageEventArgs.MessageType.Connect);
+                    if (ip1 != null)
+                    {
+                        ip = ip1;
+                        isSSH = "0";
+                    }
+                    else // SSH
+                    {
+                        ip = ip2;
+                        isSSH = "1";
+                    }
+                    if (isSSH == "1") // Let It Be Known Connection Is SSH
+                    {
+                        iSSH = "SSH ";
+                    }
+                    OnStatusMessageUpdated(iSSH + "Connection from " + ip, StatusMessageEventArgs.MessageType.Connect);
                     if (node != null)
                     {
                         node.RemoteAddress = ip;
                         OnStatusMessageUpdated("Launching Node #" + node.Node, StatusMessageEventArgs.MessageType.LogInfo);
-                        Thread instanceThread = new Thread(() => LaunchInstance(node, socket));
-                        instanceThread.Name = "Instance #" + node.Node;
-                        instanceThread.Start();
+                        if (isSSH != "1")
+                        {
+                            Thread instanceThread = new Thread(() => LaunchInstance(node, socket1));
+                            instanceThread.Name = "Instance #" + node.Node;
+                            instanceThread.Start();
+                        }
+                        else // SSH
+                        {
+                            Thread instanceThread = new Thread(() => LaunchInstance(node, socket2));
+                            instanceThread.Name = "Instance #" + node.Node;
+                            instanceThread.Start();
+                        }
                         OnNodeUpdated(node);
                     }
                     else
@@ -119,11 +159,25 @@ namespace WWIV5TelnetServer
                         byte[] busy = System.Text.Encoding.ASCII.GetBytes("BUSY");
                         try
                         {
-                            socket.Send(busy);
+                            if (isSSH != "1")
+                            {
+                                socket1.Send(busy);
+                            }
+                            else
+                            {
+                                socket2.Send(busy);
+                            }
                         }
                         finally
                         {
-                            socket.Close();
+                            if (isSSH != "1")
+                            {
+                                socket1.Close();
+                            }
+                            else
+                            {
+                                socket2.Close();
+                            }
                         }
                     }
                 }
@@ -139,7 +193,17 @@ namespace WWIV5TelnetServer
             try
             {
                 var executable = Properties.Settings.Default.executable;
-                var argumentsTemplate = Properties.Settings.Default.parameters;
+                // Detect Port 22 SSH or Use Telnet
+                string bbsProperties;
+                if (isSSH != "1")
+                {
+                    bbsProperties = Properties.Settings.Default.parameters;
+                }
+                else
+                {
+                    bbsProperties = Properties.Settings.Default.parameters2;
+                }
+                var argumentsTemplate = bbsProperties;
                 var homeDirectory = Properties.Settings.Default.homeDirectory;
 
                 Launcher launcher = new Launcher(executable, homeDirectory, argumentsTemplate, DebugLog);
