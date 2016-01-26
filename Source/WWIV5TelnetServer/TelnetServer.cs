@@ -75,7 +75,7 @@ namespace WWIV5TelnetServer
                 server1.Close();
                 server1 = null;
             }
-            else // SSH
+            else if (server2 != null) // SSH
             {
                 server2.Close();
                 server2 = null;
@@ -143,14 +143,15 @@ namespace WWIV5TelnetServer
                             Thread instanceThread = new Thread(() => LaunchInstance(node, socket1));
                             instanceThread.Name = "Instance #" + node.Node;
                             instanceThread.Start();
+                            OnNodeUpdated(node);
                         }
                         else // SSH
                         {
                             Thread instanceThread = new Thread(() => LaunchInstance(node, socket2));
                             instanceThread.Name = "Instance #" + node.Node;
                             instanceThread.Start();
+                            OnNodeUpdated(node);
                         }
-                        OnNodeUpdated(node);
                     }
                     else
                     {
